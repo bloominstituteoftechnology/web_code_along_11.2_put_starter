@@ -1,31 +1,14 @@
 const db = require('../../data/db-config')
 
-async function getAll() {
-  const questions = await db('questions')
+async function get(question_ids) {
+  const questions = await db('questions') // =============== 👉 [Code-Along 14.1] - step 2
     .select('question_title', 'question_text', 'question_id')
     .orderBy('updated_at', 'desc')
-  let options = await db('options')
-    .select('option_id', 'option_text', 'is_correct', 'remark', 'question_id')
-  questions.forEach(q => {
-    let q_options = options.filter(o => o.question_id == q.question_id)
-    q_options = q_options.map(o => ({
-      option_id: o.option_id,
-      option_text: o.option_text,
-      is_correct: !!o.is_correct,
-      remark: o.remark,
-    }))
-    q.options = q_options
-  })
-  return questions
-}
-
-async function getByIds(question_ids) {
-  const questions = await db('questions')
-    .select('question_title', 'question_text', 'question_id')
     .whereIn('question_id', question_ids)
-  let options = await db('options').whereIn('question_id', question_ids)
+  const options = await db('options')
     .select('option_id', 'option_text', 'is_correct', 'remark', 'question_id')
-  questions.forEach(q => {
+    .whereIn('question_id', question_ids)
+  questions.forEach(q => { // =============== 👉 [Code-Along 14.1] - step 4
     q.options = []
     options.forEach(o => {
       if (o.question_id === q.question_id) {
@@ -41,30 +24,62 @@ async function getByIds(question_ids) {
   return questions
 }
 
+async function getAll() {
+  const rows = await db('questions as q') // =============== 👉 [Code-Along 14.2] - step 2
+    .join('options as o', 'q.question_id', 'o.question_id')
+    .orderBy('q.updated_at', 'desc')
+    .select(
+      'q.question_id', 'q.question_title', 'q.question_text',
+      'o.option_id', 'o.option_text', 'o.remark', 'o.is_correct'
+    )
+  const reduced = rows.reduce((acc, row) => { // =============== 👉 [Code-Along 14.2] - step 4
+    const q = {
+      question_title: row.question_title,
+      question_text: row.question_text,
+      question_id: row.question_id,
+    }
+    const o = {
+      option_id: row.option_id,
+      option_text: row.option_text,
+      is_correct: !!row.is_correct,
+      remark: row.remark,
+    }
+    if (acc.has(q.question_id)) {
+      const question = acc.get(q.question_id)
+      question.options.push(o)
+    } else {
+      acc.set(q.question_id, { ...q, options: [o] })
+    }
+    return acc
+  }, new Map)
+  return Array.from(reduced.values())
+}
+
 async function create(question) {
-  let { options, ...rest } = question
-  const [question_id] = await db('questions').insert(rest, ['question_id'])
-  options = options.map(o => ({ ...o, question_id }))
-  await db('options').insert(options)
-  const [newQuestion] = await getByIds([question_id])
-  return newQuestion
+  let created_question_id
+  await db.transaction(async trx => {
+    let { options, ...rest } = question
+    const [question_id] = await trx('questions').insert(rest)
+    options = options.map(option => ({ ...option, question_id }))
+    await trx('options').insert(options)
+    created_question_id = question_id
+  })
+  const [created_question] = await get([created_question_id])
+  return created_question
 }
 
 async function editById(question_id, { options, ...rest }) {
-  await db('options').where('question_id', question_id).delete()
-  const promises = options.map(option => {
-    return db('options').where('option_id', option.option_id).insert({
-      option_text: option.option_text,
-      remark: option.remark,
-      is_correct: option.is_correct,
-      question_id,
+  await db.transaction(async trx => {
+    await trx('options').where('question_id', question_id).delete()
+    const promises = options.map(option => {
+      return trx('options').where('option_id', option.option_id).insert({ ...option, question_id })
     })
+    await Promise.all(promises)
+    const { question_title, question_text } = rest
+    await trx('questions').where('question_id', question_id)
+      .update({ question_title, question_text })
   })
-  await Promise.all(promises)
-  const { question_title, question_text } = rest
-  await db('questions').where('question_id', question_id)
-    .update({ question_title, question_text })
-  const [editedQuestion] = await getByIds([question_id])
+  const [editedQuestion] = await get([question_id])
   return editedQuestion
 }
 
@@ -72,7 +87,7 @@ async function getByText({ text }) {
   const questions = await db.raw(`
     SELECT question_id FROM question_search WHERE question_search MATCH ?;
   `, [text])
-  const result = await getByIds(questions.map(q => q.question_id))
+  const result = await get(questions.map(q => q.question_id))
   return result
 }
 
@@ -81,5 +96,5 @@ module.exports = {
   create,
   editById,
   getByText,
-  getByIds,
+  get,
 }

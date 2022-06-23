@@ -1,85 +1,120 @@
 const db = require('../../data/db-config')
+const { randomizeArray } = require('../../../shared/utils')
 
-function randomizeArray(arr) {
-  const result = [...arr]
-  // In production we should use a fair PRNG, or a CSPRNG
-  for (let idx in result) {
-    const randomIdx = Math.floor(Math.random() * arr.length)
-    // Items that will swap positions
-    const item1 = result[idx]
-    const item2 = result[randomIdx]
-    // Perform the swap
-    result[idx] = item2
-    result[randomIdx] = item1
-  }
-  return result
-}
-
-async function randomQuiz({ role_id }) {
+/**
+ * @returns {String}
+ */
+async function getRandomQuizId() {
   const [{ question_id }] = await db.raw(`
     SELECT question_id FROM questions ORDER BY RANDOM() LIMIT 1
   `)
-  const rows = await db.raw(`
-    SELECT
-      q.question_id, q.question_text, q.question_title,
-      o.option_id, o.option_text, o.is_correct
-    FROM questions q
-    JOIN options o
-      ON q.question_id = o.question_id
-    WHERE q.question_id = ?
-  `, [question_id])
+  return question_id
+}
 
-  const result = rows.reduce((acc, row) => {
-    if (!acc.question_id) {
-      acc.question_id = row.question_id
-      acc.question_text = row.question_text
+/**
+ * @param {{ role_id: Number }} user
+ * @returns {Object}
+ */
+async function getRandomQuiz({ role_id }) {
+  const question_id = await getRandomQuizId()
+  const quiz = await getQuiz({ question_id, role_id })
+  return quiz
+}
+// =============== 👉 [Code-Along 15.2] - step 1
+/**
+ * @param {{ question_id: Number, role_id: Number }} user
+ * @returns {Object}
+ *
+ * Example `getQuiz({ question_id: 1, role_id: 2 })` (non-admin role)
+ *
+ * {
+ *    question_id: 1,
+ *    question_text: "What's in Bilbo's pocket?",
+ *    options: [
+ *      { option_id: 1, option_text: 'The One Ring.' },
+ *      { option_id: 2, option_text: 'Hand.' },
+ *      { option_id: 3, option_text: 'Nothing.' },
+ *    ]
+ * }
+ *
+ * Example `getQuiz({ question_id: 1, role_id: 1 })` (admin role)
+ *
+ * {
+ *    question_id: 1,
+ *    question_title: "Bilbo's Ring"
+ *    question_text: "What's in Bilbo's pocket?",
+ *    options: [
+ *      { option_id: 1, option_text: 'The One Ring.', is_correct: true },
+ *      { option_id: 2, option_text: 'Hand.', is_correct: false },
+ *      { option_id: 3, option_text: 'Nothing.', is_correct: false },
+ *    ]
+ * }
+ */
+async function getQuiz({ question_id, role_id }) {
+  // const rows = await db.raw(`
+  //   SELECT
+  //     q.question_id, q.question_text, q.question_title,
+  //     o.option_id, o.option_text, o.is_correct
+  //   FROM questions q
+  //   JOIN options o
+  //     ON q.question_id = o.question_id
+  //   WHERE q.question_id = ?
+  // `, [question_id])
 
-      if (role_id === 1) {
-        acc.question_title = row.question_title
+  const rows = await db('questions as q') // =============== 👉 [Code-Along 15.2] - step 3
+    .join('options as o', 'q.question_id', ' o.question_id')
+    .select(
+      'q.question_id',
+      'q.question_text',
+      'q.question_title',
+      'o.option_id',
+      'o.option_text',
+      'o.is_correct',
+    )
+    .where('q.question_id', question_id)
+
+  let result = { options: [] }
+
+  for (let row of rows) {
+    if (!result.question_id) {
+      result.question_id = row.question_id
+      result.question_text = row.question_text
+
+      if (role_id === 1) { // admin user
+        result.question_title = row.question_title
       }
     }
     const option = {
       option_id: row.option_id,
       option_text: row.option_text,
     }
-    if (role_id === 1) {
+    if (role_id === 1) { // admin user
       option.is_correct = !!row.is_correct
     }
-    acc.options.push(option)
-    return acc
-  }, { options: [] })
-  const randomOptions = randomizeArray(result.options)
-  result.options = randomOptions
+    result.options.push(option)
+  }
+
+  result.options = randomizeArray(result.options)
   return result
 }
 
-async function prevAnswers(user_id) {
-  const answers = await db('answers')
-    .where('user_id', user_id)
-    .groupBy('question_id')
-    .count('question_id')
-    .sum('correctly_answered')
-    .select('question_id')
-  return answers
-}
-
+// =============== 👉 [Code-Along 13.1] - step 2
+/**
+ * @param {{ user_id: Number, role_id: Number }} user
+ * @returns {Object}
+ */
 async function nextQuiz({ user_id, role_id }) {
-  if (!user_id) {
-    const random = await randomQuiz({ role_id })
-    return random
+  if (user_id) {
+    // TODO: build intelligent quiz choosing based on the history of answers of the user
   }
-
-  const answers = prevAnswers(user_id)
-  if (!answers.length) {
-    const random = await randomQuiz({ role_id })
-    return random
-  }
-
-  // TODO: build intelligent question choosing based on the history of answers
-  const random = await randomQuiz({ role_id })
-  return random
+  const randomQuiz = await getRandomQuiz({ role_id })
+  return randomQuiz
 }
 
+/**
+ * @param {{ question_id: number, option_id: number, user_id: number }} answer
+ * @returns {Object}
+ */
 async function answerQuiz({ question_id, option_id, user_id }) {
   const option = await db('options').where('option_id', option_id).first()
   if (user_id && user_id != 1) {
@@ -88,13 +123,14 @@ async function answerQuiz({ question_id, option_id, user_id }) {
   return {
     remark: option.remark,
     is_correct: !!option.is_correct,
-    verdict: `You ${option.is_correct ? "are CORRECT" : "screwed up"}`,
+    verdict: `You are ${option.is_correct ? "CORRECT" : "incorrect"}`,
   }
 }
 
 module.exports = {
+  getRandomQuizId,
+  getQuiz,
+  getRandomQuiz,
   nextQuiz,
   answerQuiz,
-  prevAnswers,
-  randomQuiz,
 }
