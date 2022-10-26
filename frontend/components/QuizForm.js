@@ -59,6 +59,10 @@ export class QuizForm extends React.Component {
   }
   onSubmit = evt => {
     evt.preventDefault()
+    // we need a state from Redux, and a couple of async action creators
+    // the API expects the question to have `options` as an array
+    // when editing, see in `quizForm` how the `question_id` exists, as opposed to when creating
+    // in either case, we redirect to the preview quiz screen using this.onRedirect
   }
   render() {
     const { quizForm } = this.props
