@@ -174,7 +174,11 @@ export function createQuestion(question, redirect) {
 }
 export function editQuestion(question, redirect) {
   return function (dispatch) {
-
+    // start and stop spinner
+    // visual message for user
+    // clean up the form
+    // load the data from the API into the the `quiz` state, so the quiz form is ready to go
+    // redirect to take the newly created quiz
   }
 }
 export function getAuthStatus() {
